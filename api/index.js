@@ -15,70 +15,77 @@ export default async function handler(req, res) {
         const formattedPath = actualPath.startsWith('/') ? actualPath : `/${actualPath}`;
         const downloadUrl = `https://www.call2all.co.il/ym/api/DownloadFile?token=${YEMOT_TOKEN}&path=ivr2:${formattedPath}`;
 
-        // 1. הורדת הקובץ מימות
+        // 1. הורדת הקובץ מימות המשיח
+        console.log("מוריד קובץ מימות...");
         const audioResp = await fetch(downloadUrl);
-        if (!audioResp.ok) throw new Error("קובץ לא נמצא בימות");
+        if (!audioResp.ok) throw new Error("קובץ לא נמצא בימות המשיח");
         const buffer = Buffer.from(await audioResp.arrayBuffer());
+        const numBytes = buffer.length;
 
-        // 2. העלאת הקובץ לגוגל - שיטת ה-Multipart הפשוטה
-        console.log("מעלה קובץ לגוגל...");
-        const uploadUrl = `https://generativelanguage.googleapis.com/upload/v1beta/files?key=${API_KEY}`;
-        
-        // יצירת גוף ההודעה עם המטא-דאטה והקובץ
-        const boundary = '-------boundary';
-        const metadata = JSON.stringify({ file: { displayName: 'audio_record' } });
-        
-        const body = Buffer.concat([
-            Buffer.from(`--${boundary}\r\nContent-Type: application/json\r\n\r\n${metadata}\r\n--${boundary}\r\nContent-Type: audio/wav\r\n\r\n`),
-            buffer,
-            Buffer.from(`\r\n--${boundary}--`)
-        ]);
-
-        const uploadResp = await fetch(uploadUrl, {
+        // 2. שלב ראשון: התחלת העלאה (Initial resumable request)
+        console.log("מתחיל העלאה לגוגל...");
+        const startUploadResp = await fetch(`https://generativelanguage.googleapis.com/upload/v1beta/files?key=${API_KEY}`, {
             method: 'POST',
             headers: {
-                'Content-Type': `multipart/related; boundary=${boundary}`,
-                'Content-Length': body.length.toString()
+                'X-Goog-Upload-Protocol': 'resumable',
+                'X-Goog-Upload-Command': 'start',
+                'X-Goog-Upload-Header-Content-Length': numBytes.toString(),
+                'X-Goog-Upload-Header-Content-Type': 'audio/wav',
+                'Content-Type': 'application/json'
             },
-            body: body
+            body: JSON.stringify({ file: { display_name: 'AUDIO_RECORD' } })
         });
 
-        const uploadData = await uploadResp.json();
-        if (!uploadData.file || !uploadData.file.uri) {
-            console.error("שגיאת העלאה:", uploadData);
-            throw new Error(uploadData.error?.message || "העלאת הקובץ נכשלה");
-        }
+        const uploadUrl = startUploadResp.headers.get('x-goog-upload-url');
+        if (!uploadUrl) throw new Error("לא התקבל URL להעלאה מגוגל");
 
+        // 3. שלב שני: העלאת הבייטים בפועל
+        console.log("מעלה בייטים...");
+        const finalUploadResp = await fetch(uploadUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Length': numBytes.toString(),
+                'X-Goog-Upload-Offset': '0',
+                'X-Goog-Upload-Command': 'upload, finalize'
+            },
+            body: buffer
+        });
+
+        const uploadData = await finalUploadResp.json();
         const fileUri = uploadData.file.uri;
-        console.log("הקובץ הועלה:", fileUri);
+        console.log("קובץ הועלה בהצלחה:", fileUri);
 
-        // 3. שליחה ל-Gemini 2.0 Flash
+        // 4. יצירת תשובה מהמודל (משתמשים ב-2.0 Flash)
+        console.log("מבקש תשובה מ-Gemini 2.0...");
         const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${API_KEY}`;
         
-        const geminiResponse = await fetch(geminiUrl, {
+        const response = await fetch(geminiUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 contents: [{
                     parts: [
-                        { text: "ענה בקצרה מאוד על השאלה מהאודיו,, ללא נקודות,, רק פסיקים" },
-                        { fileData: { mimeType: "audio/wav", fileUri: fileUri } }
+                        { text: "ענה בקצרה מאוד על השאלה מהאודיו,, ללא נקודות כלל,, רק פסיקים,, עברית בלבד" },
+                        { file_data: { mime_type: "audio/wav", file_uri: fileUri } }
                     ]
                 }]
             })
         });
 
-        const data = await geminiResponse.json();
+        const data = await response.json();
+        
         if (data.error) throw new Error(data.error.message);
 
         let aiText = data.candidates[0].content.parts[0].text;
         aiText = aiText.replace(/\./g, ",,").replace(/["']/g, "").trim();
 
+        console.log("תשובה סופית:", aiText);
         res.setHeader('Content-Type', 'text/plain; charset=utf-8');
         return res.status(200).send(`read=t-${aiText}=voice_result,,record,,,no,,,,20`);
 
     } catch (error) {
-        console.error("שגיאה:", error.message);
+        console.error("שגיאה בתהליך:", error.message);
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
         return res.status(200).send(`read=t-חלה שגיאה,, ${error.message}=voice_result,,record,,,no,,,,20`);
     }
 }
