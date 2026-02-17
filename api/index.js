@@ -17,21 +17,34 @@ export default async function handler(req, res) {
 
         // 1. הורדת הקובץ מימות
         const audioResp = await fetch(downloadUrl);
-        const audioBlob = await audioResp.blob();
-        const buffer = Buffer.from(await audioBlob.arrayBuffer());
+        const buffer = Buffer.from(await audioResp.arrayBuffer());
 
-        // 2. העלאת הקובץ ל-Google File API (לפי התיעוד)
+        // 2. העלאת הקובץ לגוגל בשיטת ה-Simple Upload (הכי יציבה ל-Vercel)
         console.log("מעלה קובץ לגוגל...");
-        const uploadResp = await fetch(`https://generativelanguage.googleapis.com/upload/v1beta/files?key=${API_KEY}`, {
+        const uploadUrl = `https://generativelanguage.googleapis.com/upload/v1beta/files?key=${API_KEY}`;
+        
+        const uploadResp = await fetch(uploadUrl, {
             method: 'POST',
-            headers: { 'X-Goog-Upload-Protocol': 'multipart' },
-            body: buffer // שליחה כבינארי נקי
+            headers: {
+                'X-Goog-Upload-Command': 'upload, finalize',
+                'X-Goog-Upload-Offset': '0',
+                'Content-Type': 'audio/wav',
+                'X-Goog-Upload-Protocol': 'resumable' // נשתמש בזה כדי למנוע את שגיאת ה-JSON
+            }
         });
-        const uploadData = await uploadResp.json();
-        const fileUri = uploadData.file.uri;
 
-        // 3. שליחה ל-Gemini 2.0 Flash עם הקישור לקובץ
-        console.log("מבקש תשובה מ-Gemini 2.0...");
+        // יצירת ה-Session להעלאה
+        const sessionUrl = uploadResp.headers.get('X-Goog-Upload-URL');
+        const finalUpload = await fetch(sessionUrl, {
+            method: 'POST',
+            body: buffer
+        });
+
+        const uploadData = await finalUpload.json();
+        const fileUri = uploadData.file.uri;
+        console.log("הקובץ הועלה בהצלחה:", fileUri);
+
+        // 3. שליחה ל-Gemini 2.0 Flash
         const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${API_KEY}`;
         
         const geminiResponse = await fetch(geminiUrl, {
@@ -40,7 +53,7 @@ export default async function handler(req, res) {
             body: JSON.stringify({
                 contents: [{
                     parts: [
-                        { text: "ענה בקצרה מאוד על השאלה מהאודיו. ללא נקודות, רק פסיקים." },
+                        { text: "ענה בקצרה מאוד על השאלה מהאודיו,, ללא נקודות,, רק פסיקים" },
                         { fileData: { mimeType: "audio/wav", fileUri: fileUri } }
                     ]
                 }]
@@ -51,14 +64,14 @@ export default async function handler(req, res) {
         
         if (data.error) throw new Error(data.error.message);
 
-        const aiText = data.candidates[0].content.parts[0].text.replace(/\./g, ",,").trim();
-        console.log("הצלחה!", aiText);
+        let aiText = data.candidates[0].content.parts[0].text;
+        aiText = aiText.replace(/\./g, ",,").replace(/["']/g, "").trim();
 
         res.setHeader('Content-Type', 'text/plain; charset=utf-8');
         return res.status(200).send(`read=t-${aiText}=voice_result,,record,,,no,,,,20`);
 
     } catch (error) {
         console.error("שגיאה:", error.message);
-        return res.status(200).send(`read=t-חלה שגיאה,, ${error.message.includes('quota') ? 'נסה שוב בעוד דקה' : error.message}=voice_result,,record,,,no,,,,20`);
+        return res.status(200).send(`read=t-חלה שגיאה,, ${error.message}=voice_result,,record,,,no,,,,20`);
     }
 }
