@@ -13,7 +13,7 @@ export default async function handler(req, res) {
     if (req.url.includes('favicon')) return res.status(200).send("");
 
     const userId = req.query.ApiEnterID || req.query.ApiPhone || "guest";
-    const voiceFileUrl = req.query.voice_result;
+    const voiceFileUrl = req.query.voice_result || req.query.data || req.query.last_data;
 
     const model = genAI.getGenerativeModel({ 
         model: "gemini-1.5-flash",
