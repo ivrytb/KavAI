@@ -57,7 +57,7 @@ export default async function handler(req, res) {
 
         // 4. יצירת תשובה מהמודל (חזרה ל-1.5 Flash היציב)
         console.log("מבקש תשובה מ-Gemini 1.5 Flash...");
-        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${API_KEY}`;
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${API_KEY}`;
         
         const response = await fetch(geminiUrl, {
             method: 'POST',
