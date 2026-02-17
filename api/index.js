@@ -19,9 +19,9 @@ export default async function handler(req, res) {
         const arrayBuffer = await audioResponse.arrayBuffer();
         const base64Audio = Buffer.from(arrayBuffer).toString("base64");
 
-        // שימוש במודל Gemini 2.0 Flash - הגרסה הכי עדכנית
-        console.log("שולח ל-Gemini 2.0 Flash...");
-        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${API_KEY}`;
+        // חזרה ל-1.5 פלאש - הוא הכי יציב למכסות חינמיות
+        console.log("שולח ל-Gemini 1.5 Flash...");
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${API_KEY}`;
         
         const geminiResponse = await fetch(geminiUrl, {
             method: 'POST',
@@ -29,7 +29,7 @@ export default async function handler(req, res) {
             body: JSON.stringify({
                 contents: [{
                     parts: [
-                        { text: "ענה בקצרה מאוד על השאלה מהאודיו. בלי נקודות בכלל, רק פסיקים. עברית." },
+                        { text: "ענה בקצרה מאוד על השאלה מהאודיו. בלי נקודות כלל, רק פסיקים. עברית." },
                         { inlineData: { mimeType: "audio/wav", data: base64Audio } }
                     ]
                 }]
@@ -37,14 +37,13 @@ export default async function handler(req, res) {
         });
 
         const data = await geminiResponse.json();
-        console.log("Gemini Response:", JSON.stringify(data));
 
         if (data.error) {
-            throw new Error(`שגיאת גוגל: ${data.error.message}`);
-        }
-
-        if (!data.candidates || !data.candidates[0].content) {
-            throw new Error("גוגל לא הצליח לענות (אולי סינון בטיחות)");
+            // אם עדיין יש חריגה, נשמיע למשתמש הודעה להמתין
+            if (data.error.code === 429) {
+                return res.status(200).send(`read=t-המערכת עמוסה כרגע,, אנא נסה שוב בעוד דקה=voice_result,,record,,,no,,,,20`);
+            }
+            throw new Error(data.error.message);
         }
 
         let aiText = data.candidates[0].content.parts[0].text;
