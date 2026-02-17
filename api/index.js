@@ -15,47 +15,49 @@ export default async function handler(req, res) {
         const formattedPath = actualPath.startsWith('/') ? actualPath : `/${actualPath}`;
         const downloadUrl = `https://www.call2all.co.il/ym/api/DownloadFile?token=${YEMOT_TOKEN}&path=ivr2:${formattedPath}`;
 
-        // 1. הורדה
+        console.log("--- שלב 1: הורדה מימות ---");
         const audioResp = await fetch(downloadUrl);
-        if (!audioResp.ok) throw new Error("קובץ לא נמצא");
+        if (!audioResp.ok) throw new Error("קובץ לא נמצא בימות המשיח");
         const buffer = Buffer.from(await audioResp.arrayBuffer());
+        const numBytes = buffer.length;
 
-        // 2+3. העלאה לגוגל
-        const startUpload = await fetch(`https://generativelanguage.googleapis.com/upload/v1beta/files?key=${API_KEY}`, {
+        console.log("--- שלב 2+3: העלאה לגוגל ---");
+        const startUploadResp = await fetch(`https://generativelanguage.googleapis.com/upload/v1beta/files?key=${API_KEY}`, {
             method: 'POST',
             headers: {
                 'X-Goog-Upload-Protocol': 'resumable',
                 'X-Goog-Upload-Command': 'start',
-                'X-Goog-Upload-Header-Content-Length': buffer.length.toString(),
+                'X-Goog-Upload-Header-Content-Length': numBytes.toString(),
                 'X-Goog-Upload-Header-Content-Type': 'audio/wav',
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ file: { display_name: 'AUDIO' } })
+            body: JSON.stringify({ file: { display_name: 'AUDIO_RECORD' } })
         });
 
-        const uploadUrl = startUpload.headers.get('x-goog-upload-url');
-        const finalUpload = await fetch(uploadUrl, {
+        const uploadUrl = startUploadResp.headers.get('x-goog-upload-url');
+        const finalUploadResp = await fetch(uploadUrl, {
             method: 'POST',
             headers: {
-                'Content-Length': buffer.length.toString(),
+                'Content-Length': numBytes.toString(),
                 'X-Goog-Upload-Offset': '0',
                 'X-Goog-Upload-Command': 'upload, finalize'
             },
             body: buffer
         });
 
-        const uploadData = await finalUpload.json();
+        const uploadData = await finalUploadResp.json();
         const fileUri = uploadData.file.uri;
 
-        // 4. בקשת תשובה
+        console.log("--- שלב 4: בקשת תשובה מ-Gemini ---");
         const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`;
+
         const response = await fetch(geminiUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 contents: [{
                     parts: [
-                        { text: "אתה עוזר קולי בשם המוח. ענה בעברית בלבד. אל תשתמש בסימני פיסוק חוץ מפסיקים. במקום נקודה שים פסיק. אל תשתמש בגרשיים או סוגריים. ענה תשובה ממוקדת של עד 4 משפטים כדי שלא תהיה ארוכה מדי." },
+                        { text: "אתה עוזר קולי חכם בשם המוח. ענה למשתמש בעברית. אל תשתמש בסימני פיסוק כלל חוץ מפסיקים. אל תשתמש בגרשיים, מקפים או ירידות שורה. ענה תשובה ממוקדת של עד 3-4 משפטים." },
                         { file_data: { mime_type: "audio/wav", file_uri: fileUri } }
                     ]
                 }]
@@ -63,26 +65,41 @@ export default async function handler(req, res) {
         });
 
         const data = await response.json();
-        let aiText = data.candidates?.[0]?.content?.parts?.[0]?.text || "לא הצלחתי להבין";
+        console.log("תגובה גולמית מגוגל:", JSON.stringify(data, null, 2));
 
-        // --- שלב הניקוי הקריטי לימות המשיח ---
+        if (data.error) throw new Error(`שגיאת API: ${data.error.message}`);
+
+        if (!data.candidates || data.candidates.length === 0) {
+            throw new Error("לא התקבלו מועמדים לתשובה");
+        }
+
+        const candidate = data.candidates[0];
+        if (candidate.finishReason === "SAFETY") {
+            return res.status(200).send(`read=t-המערכת חסמה את התשובה מסיבות בטיחות=voice_result,,record,,,no,,,,20`);
+        }
+
+        let aiText = candidate.content?.parts?.[0]?.text || "לא הצלחתי להבין את האודיו";
+
+        // --- ניקוי אגרסיבי לימות המשיח ---
         aiText = aiText
-            .replace(/\n/g, " ")       // הסרת ירידות שורה
-            .replace(/["'\"'״׳]/g, "") // הסרת כל סוגי הגרשיים
-            .replace(/[.-]/g, ",,")     // הפיכת נקודות ומקפים לפסיקים להפסקה בקריינות
-            .replace(/[^\u0590-\u05FF0-9, ]/g, "") // השארת רק עברית, מספרים ופסיקים (מסנן תווים מיוחדים)
-            .replace(/\s+/g, " ")      // הסרת רווחים כפולים
+            .replace(/\n/g, " ")                // הסרת ירידות שורה
+            .replace(/["'\"'״׳״]/g, "")         // הסרת כל סוגי הגרשיים
+            .replace(/[.\-–—]/g, ",,")          // הפיכת נקודות ומקפים לפסיקים (הפסקה בקריינות)
+            .replace(/[^\u0590-\u05FF0-9, ]/g, "") // השארת רק עברית, מספרים, פסיקים ורווחים
+            .replace(/\s+/g, " ")               // הסרת רווחים כפולים
             .trim();
 
-        console.log("תשובה נקייה סופית:", aiText);
+        console.log("תשובה מעובדת סופית:", aiText);
 
         res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-        // חשוב: החלפת רווחים ב-plus כדי למנוע בעיות ב-URL
-        const encodedText = aiText.split(' ').join('+');
-        return res.status(200).send(`read=t-${encodedText}=voice_result,,record,,,no,,,,20`);
+        // המרה לפורמט URL-Safe שימות המשיח אוהבת
+        const safeText = aiText.split(' ').join('+');
+        
+        return res.status(200).send(`read=t-${safeText}=voice_result,,record,,,no,,,,20`);
 
     } catch (error) {
-        console.error("Error:", error.message);
-        return res.status(200).send(`read=t-חלה+שגיאה+במערכת=voice_result,,record,,,no,,,,20`);
+        console.error("שגיאה:", error.message);
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        return res.status(200).send(`read=t-חלה שגיאה,, ${error.message.replace(/\s+/g, '+')}=voice_result,,record,,,no,,,,20`);
     }
 }
