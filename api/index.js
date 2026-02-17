@@ -71,34 +71,28 @@ export default async function handler(req, res) {
                     ]
                 }]
             })
+        }); // <--- כאן הייתה חסרה הסגירה!
 
         const data = await response.json();
-
-        // לוג מפורט של כל התגובה מגוגל - חשוב מאוד לניתוח!
         console.log("תגובה גולמית מגוגל:", JSON.stringify(data, null, 2));
 
         if (data.error) throw new Error(`שגיאת API: ${data.error.message}`);
 
-        // בדיקה אם המודל החזיר תשובה או נעצר
         if (!data.candidates || data.candidates.length === 0) {
-            throw new Error("לא התקבלו מועמדים לתשובה (Candidates)");
+            throw new Error("לא התקבלו מועמדים לתשובה");
         }
 
         const candidate = data.candidates[0];
         
-        // בדיקה אם התשובה נחסמה
         if (candidate.finishReason === "SAFETY") {
-            console.warn("אזהרה: התשובה נחסמה על ידי מסנני בטיחות");
             return res.status(200).send(`read=t-מצטער,, התוכן נחסם מסיבות בטיחות=voice_result,,record,,,no,,,,20`);
         }
 
         let aiText = candidate.content?.parts?.[0]?.text;
         
         if (!aiText) {
-            console.error("המבנה תקין אך הטקסט ריק. סיבת סיום:", candidate.finishReason);
             aiText = "לא הצלחתי להבין את האודיו,, נסה שוב";
         } else {
-            // ניקוי טקסט: נקודות לפסיקים, הסרת מרכאות
             aiText = aiText.replace(/\./g, ",,").replace(/["']/g, "").trim();
         }
 
