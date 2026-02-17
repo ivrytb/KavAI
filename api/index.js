@@ -16,14 +16,15 @@ export default async function handler(req, res) {
         const downloadUrl = `https://www.call2all.co.il/ym/api/DownloadFile?token=${YEMOT_TOKEN}&path=ivr2:${formattedPath}`;
 
         // 1. הורדת הקובץ מימות המשיח
-        console.log("מוריד קובץ מימות...");
+        console.log("--- שלב 1: הורדה מימות ---");
         const audioResp = await fetch(downloadUrl);
         if (!audioResp.ok) throw new Error("קובץ לא נמצא בימות המשיח");
         const buffer = Buffer.from(await audioResp.arrayBuffer());
         const numBytes = buffer.length;
+        console.log(`הורדו ${numBytes} בייטים מהקלטה: ${formattedPath}`);
 
-        // 2. שלב ראשון: התחלת העלאה (Initial resumable request)
-        console.log("מתחיל העלאה לגוגל...");
+        // 2. שלב ראשון: התחלת העלאה לגוגל
+        console.log("--- שלב 2: התחלת העלאה לגוגל ---");
         const startUploadResp = await fetch(`https://generativelanguage.googleapis.com/upload/v1beta/files?key=${API_KEY}`, {
             method: 'POST',
             headers: {
@@ -40,7 +41,7 @@ export default async function handler(req, res) {
         if (!uploadUrl) throw new Error("לא התקבל URL להעלאה מגוגל");
 
         // 3. שלב שני: העלאת הבייטים בפועל
-        console.log("מעלה בייטים...");
+        console.log("--- שלב 3: העלאת בייטים ---");
         const finalUploadResp = await fetch(uploadUrl, {
             method: 'POST',
             headers: {
@@ -53,19 +54,19 @@ export default async function handler(req, res) {
 
         const uploadData = await finalUploadResp.json();
         const fileUri = uploadData.file.uri;
-        console.log("קובץ הועלה בהצלחה:", fileUri);
+        console.log("קובץ הועלה בהצלחה ל-Gemini:", fileUri);
 
-        // 4. יצירת תשובה מהמודל (חזרה ל-1.5 Flash היציב)
-        console.log("מבקש תשובה מ-Gemini 1.5 Flash...");
+        // 4. בקשת תשובה מהמודל
+        console.log("--- שלב 4: בקשת תשובה מ-Gemini 2.5 Flash ---");
         const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`;
-        
+
         const response = await fetch(geminiUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 contents: [{
                     parts: [
-                        { text: "ענה בקצרה מאוד על השאלה מהאודיו,, ללא נקודות כלל,, רק פסיקים,, עברית בלבד" },
+                        { text: "הקשב לאודיו המצורף וענה למשתמש בעברית. אל תכתוב נקודות כלל, השתמש רק בפסיקים במקום. ענה תשובה קצרה ולעניין." },
                         { file_data: { mime_type: "audio/wav", file_uri: fileUri } }
                     ]
                 }]
@@ -73,19 +74,43 @@ export default async function handler(req, res) {
         });
 
         const data = await response.json();
+
+        // לוג מפורט של כל התגובה מגוגל - חשוב מאוד לניתוח!
+        console.log("תגובה גולמית מגוגל:", JSON.stringify(data, null, 2));
+
+        if (data.error) throw new Error(`שגיאת API: ${data.error.message}`);
+
+        // בדיקה אם המודל החזיר תשובה או נעצר
+        if (!data.candidates || data.candidates.length === 0) {
+            throw new Error("לא התקבלו מועמדים לתשובה (Candidates)");
+        }
+
+        const candidate = data.candidates[0];
         
-        if (data.error) throw new Error(data.error.message);
+        // בדיקה אם התשובה נחסמה
+        if (candidate.finishReason === "SAFETY") {
+            console.warn("אזהרה: התשובה נחסמה על ידי מסנני בטיחות");
+            return res.status(200).send(`read=t-מצטער,, התוכן נחסם מסיבות בטיחות=voice_result,,record,,,no,,,,20`);
+        }
 
-        let aiText = data.candidates[0].content.parts[0].text;
-        aiText = aiText.replace(/\./g, ",,").replace(/["']/g, "").trim();
+        let aiText = candidate.content?.parts?.[0]?.text;
+        
+        if (!aiText) {
+            console.error("המבנה תקין אך הטקסט ריק. סיבת סיום:", candidate.finishReason);
+            aiText = "לא הצלחתי להבין את האודיו,, נסה שוב";
+        } else {
+            // ניקוי טקסט: נקודות לפסיקים, הסרת מרכאות
+            aiText = aiText.replace(/\./g, ",,").replace(/["']/g, "").trim();
+        }
 
-        console.log("תשובה סופית:", aiText);
+        console.log("תשובה מעובדת סופית:", aiText);
+
         res.setHeader('Content-Type', 'text/plain; charset=utf-8');
         return res.status(200).send(`read=t-${aiText}=voice_result,,record,,,no,,,,20`);
 
     } catch (error) {
-        console.error("שגיאה בתהליך:", error.message);
+        console.error("שגיאה קריטית בתהליך:", error.message);
         res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-        return res.status(200).send(`read=t-חלה שגיאה,, ${error.message}=voice_result,,record,,,no,,,,20`);
+        return res.status(200).send(`read=t-חלה שגיאה במערכת,, ${error.message}=voice_result,,record,,,no,,,,20`);
     }
 }
