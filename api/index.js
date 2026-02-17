@@ -55,9 +55,9 @@ export default async function handler(req, res) {
         const fileUri = uploadData.file.uri;
         console.log("קובץ הועלה בהצלחה:", fileUri);
 
-        // 4. יצירת תשובה מהמודל (משתמשים ב-2.0 Flash)
-        console.log("מבקש תשובה מ-Gemini 2.0...");
-        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${API_KEY}`;
+        // 4. יצירת תשובה מהמודל (חזרה ל-1.5 Flash היציב)
+        console.log("מבקש תשובה מ-Gemini 1.5 Flash...");
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${API_KEY}`;
         
         const response = await fetch(geminiUrl, {
             method: 'POST',
