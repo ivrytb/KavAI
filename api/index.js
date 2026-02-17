@@ -5,43 +5,42 @@ const redis = Redis.fromEnv();
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 export default async function handler(req, res) {
-    // לוג בסיסי לכל פנייה שנכנסת
+    // 1. לוגים מפורטים לזיהוי הבעיה
     console.log("--- פנייה חדשה נכנסה ---");
-    console.log("זמן:", new Date().toLocaleString('he-IL'));
-    console.log("כל הפרמטרים שהתקבלו:", req.query);
+    console.log("Method:", req.method); // האם זה GET או POST
+    console.log("Query Params:", req.query); 
+    console.log("Body Params:", req.body); // כאן כנראה מסתתר המידע
 
     if (req.url.includes('favicon')) return res.status(200).send("");
 
-    const userId = req.query.ApiEnterID || req.query.ApiPhone || "guest";
-    const voiceFileUrl = req.query.voice_result || req.query.data || req.query.last_data;
+    // איחוד כל המקורות לפרמטרים (גם POST וגם GET)
+    const params = { ...req.query, ...req.body };
+    
+    const userId = params.ApiPhone || params.ApiEnterID || "guest";
+    const voiceFileUrl = params.voice_result;
 
     const model = genAI.getGenerativeModel({ 
         model: "gemini-1.5-flash",
-        systemInstruction: `אתה עוזר אישי למשפחה שומרת מצוות,, חוקים: 1,, שפה נקייה בלבד,, 2,, אסור נקודות (.) בכלל בתשובה,, 3,, תשובות קצרות,,`
+        systemInstruction: `אתה עוזר אישי חכם למשפחה שומרת מצוות,, חוקים: 1,, שפה נקייה בלבד,, 2,, אסור נקודות (.) בכלל,, 3,, תשובות קצרות,,`
     });
 
     try {
         let aiResponseText = "";
 
-        if (!voiceFileUrl || voiceFileUrl === "") {
-            console.log("לא זוהתה הקלטה (voice_result ריק) - שולח הודעת פתיחה");
+        // בדיקה אם קיבלנו את הפרמטר voice_result
+        if (!voiceFileUrl) {
+            console.log("מצב: כניסה ראשונית (לא נמצא voice_result)");
             aiResponseText = "שלום,, אני המוח של המערכת,, במה אוכל לעזור?";
         } else {
-            console.log("זוהתה הקלטה בכתובת:", voiceFileUrl);
+            console.log("מצב: התקבלה הקלטה לעיבוד:", voiceFileUrl);
             
-            // הורדת הקובץ
-            console.log("מתחיל להוריד קובץ שמע...");
             const response = await fetch(voiceFileUrl);
-            if (!response.ok) throw new Error(`נכשל בהורדת קובץ: ${response.statusText}`);
-            
             const arrayBuffer = await response.arrayBuffer();
-            console.log("הקובץ הורד בהצלחה, גודל:", arrayBuffer.byteLength, "בייטים");
-
+            
             const chat = model.startChat({
                 history: await redis.get(`chat_${userId}`) || [],
             });
 
-            console.log("שולח ל-Gemini לעיבוד...");
             const result = await chat.sendMessage([
                 {
                     inlineData: {
@@ -49,32 +48,23 @@ export default async function handler(req, res) {
                         data: Buffer.from(arrayBuffer).toString("base64")
                     }
                 },
-                { text: "ענה בקצרה וללא נקודות" }
+                { text: "ענה בקצרה ללא נקודות" }
             ]);
 
             aiResponseText = result.response.text();
-            console.log("תשובת Gemini המקורית:", aiResponseText);
-            
-            const history = await chat.getHistory();
-            await redis.set(`chat_${userId}`, history.slice(-10), { ex: 3600 });
-            console.log("היסטוריה נשמרה ב-Redis");
         }
 
         const cleanResponse = aiResponseText.replace(/\./g, ",,").replace(/["']/g, "");
+        
+        // השורה המדויקת שביקשת
         const ymtCommand = `read=t-${cleanResponse}=voice_result,,record,,,no,,,,20`;
         
-        console.log("שולח לימות המשיח פקודה:", ymtCommand);
-
+        console.log("תשובה נשלחת לימות:", ymtCommand);
         res.setHeader('Content-Type', 'text/plain; charset=utf-8');
         return res.status(200).send(ymtCommand);
 
     } catch (error) {
-        console.error("!!! שגיאה בתהליך !!!");
-        console.error("פירוט השגיאה:", error.message);
-        
-        // שליחת פקודה חלופית כדי שהשיחה לא תתנתק
-        const errorCommand = `read=t-סליחה,, חלה שגיאה קטנה בעיבוד ההודעה,, נסה שוב כעת=voice_result,,record,,,no,,,,20`;
-        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-        return res.status(200).send(errorCommand);
+        console.error("שגיאה:", error.message);
+        return res.status(200).send("read=t-חלה שגיאה בעיבוד,, נסה שוב=voice_result,,record,,,no,,,,20");
     }
 }
