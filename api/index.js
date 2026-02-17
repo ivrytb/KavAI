@@ -1,46 +1,62 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { Redis } from "@upstash/redis";
+import fetch from "node-fetch";
 
 const redis = Redis.fromEnv();
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 export default async function handler(req, res) {
-    // זיהוי המשתמש לפי ה-ID או הטלפון מימות המשיח
     const userId = req.query.ApiEnterID || req.query.ApiPhone || "guest";
-    const userSpeech = req.query.text;
+    const voiceFileUrl = req.query.voice_result;
 
-    if (!userSpeech) {
-        return res.status(200).send("read=text=שלום, אני המסיע האישי שלך. במה אוכל לעזור?");
-    }
+    const model = genAI.getGenerativeModel({ 
+        model: "gemini-1.5-flash",
+        systemInstruction: `אתה עוזר אישי למשפחה שומרת מצוות. 
+        כללים חשובים ביותר:
+        1. שפה נקייה ומכובדת בלבד.
+        2. אם המשתמש שואל על נושא לא צנוע או אסור, ענה: "כנראה שכחת,, אבל במשפחה שלנו לא מדברים על דברים כאלו,, ומנהלי הקו הכניסו אותי תחת מגבלות בנושא זה,, תרצה לדבר משהו אחר?"
+        3. חוק בל יעבור: אל תשתמש בנקודות (.) בכלל בתשובה שלך. במקום נקודה בסוף משפט או באמצע, שים פסיק (,) או פסיק כפול (,,).
+        4. תן תשובות קצרות שמתאימות להקראה בטלפון.`
+    });
 
     try {
-        // 1. שליפת היסטוריית השיחה מה-Redis
-        let history = await redis.get(`chat_${userId}`) || [];
+        let aiResponseText = "";
+
+        if (!voiceFileUrl) {
+            aiResponseText = "שלום,, אני המוח של המערכת,, במה אוכל לעזור?";
+        } else {
+            const response = await fetch(voiceFileUrl);
+            const buffer = await response.arrayBuffer();
+            
+            const chat = model.startChat({
+                history: await redis.get(`chat_${userId}`) || [],
+            });
+
+            const result = await chat.sendMessage([
+                {
+                    inlineData: {
+                        mimeType: "audio/wav",
+                        data: Buffer.from(buffer).toString("base64")
+                    }
+                },
+                { text: "תקשיב לשמע וענה למשתמש בלי נקודות בכלל בתשובה" }
+            ]);
+
+            aiResponseText = result.response.text().replace(/\./g, ",,");
+            
+            const history = await chat.getHistory();
+            await redis.set(`chat_${userId}`, history.slice(-10), { ex: 3600 });
+        }
+
+        // ניקוי סופי של נקודות אם Gemini בכל זאת שכח
+        const cleanResponse = aiResponseText.replace(/\./g, ",,");
+
+        const ymtCommand = `read=text=${cleanResponse}&res_type=recording&val_name=voice_result&max=15&min=1`;
         
-        const model = genAI.getGenerativeModel({ 
-            model: "gemini-1.5-flash",
-            systemInstruction: `אתה עוזר אישי חכם למשפחה שומרת מצוות. 
-            כללים: 
-            1. שפה נקייה ומכובדת בלבד.
-            2. אם המשתמש שואל על נושא לא צנוע או אסור, ענה בדיוק: "כנראה שכחת... אבל במשפחה שלנו לא מדברים על דברים כאלו, ומנהלי הקו הכניסו אותי תחת מגבלות בנושא זה, תרצה לדבר משהו אחר?"
-            3. אל תדבר על כפירה.
-            4. תן תשובות קצרות שמתאימות להקראה בטלפון.`
-        });
-
-        // 2. יצירת שיחה עם היסטוריה
-        const chat = model.startChat({ history: history });
-        const result = await chat.sendMessage(userSpeech);
-        const responseText = result.response.text();
-
-        // 3. עדכון ההיסטוריה ושמירה (שומרים רק 10 הודעות אחרונות לחיסכון במקום)
-        const updatedHistory = await chat.getHistory();
-        await redis.set(`chat_${userId}`, updatedHistory.slice(-10), { ex: 3600 }); // נמחק אחרי שעה
-
-        // 4. החזרה לימות המשיח
-        res.status(200).send(`read=text=${responseText}&tts_lang=he`);
+        res.status(200).send(ymtCommand);
 
     } catch (error) {
-        console.error(error);
-        res.status(200).send("read=text=סליחה, המוח שלי קצת עמוס כרגע. נסה שוב בעוד רגע.");
+        console.error("Error:", error);
+        res.status(200).send("read=text=סליחה,, קרתה שגיאה בעיבוד הקולי,, נסה שוב");
     }
 }
