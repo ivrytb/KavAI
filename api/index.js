@@ -17,32 +17,40 @@ export default async function handler(req, res) {
 
         // 1. הורדת הקובץ מימות
         const audioResp = await fetch(downloadUrl);
+        if (!audioResp.ok) throw new Error("קובץ לא נמצא בימות");
         const buffer = Buffer.from(await audioResp.arrayBuffer());
 
-        // 2. העלאת הקובץ לגוגל בשיטת ה-Simple Upload (הכי יציבה ל-Vercel)
+        // 2. העלאת הקובץ לגוגל - שיטת ה-Multipart הפשוטה
         console.log("מעלה קובץ לגוגל...");
         const uploadUrl = `https://generativelanguage.googleapis.com/upload/v1beta/files?key=${API_KEY}`;
         
+        // יצירת גוף ההודעה עם המטא-דאטה והקובץ
+        const boundary = '-------boundary';
+        const metadata = JSON.stringify({ file: { displayName: 'audio_record' } });
+        
+        const body = Buffer.concat([
+            Buffer.from(`--${boundary}\r\nContent-Type: application/json\r\n\r\n${metadata}\r\n--${boundary}\r\nContent-Type: audio/wav\r\n\r\n`),
+            buffer,
+            Buffer.from(`\r\n--${boundary}--`)
+        ]);
+
         const uploadResp = await fetch(uploadUrl, {
             method: 'POST',
             headers: {
-                'X-Goog-Upload-Command': 'upload, finalize',
-                'X-Goog-Upload-Offset': '0',
-                'Content-Type': 'audio/wav',
-                'X-Goog-Upload-Protocol': 'resumable' // נשתמש בזה כדי למנוע את שגיאת ה-JSON
-            }
+                'Content-Type': `multipart/related; boundary=${boundary}`,
+                'Content-Length': body.length.toString()
+            },
+            body: body
         });
 
-        // יצירת ה-Session להעלאה
-        const sessionUrl = uploadResp.headers.get('X-Goog-Upload-URL');
-        const finalUpload = await fetch(sessionUrl, {
-            method: 'POST',
-            body: buffer
-        });
+        const uploadData = await uploadResp.json();
+        if (!uploadData.file || !uploadData.file.uri) {
+            console.error("שגיאת העלאה:", uploadData);
+            throw new Error(uploadData.error?.message || "העלאת הקובץ נכשלה");
+        }
 
-        const uploadData = await finalUpload.json();
         const fileUri = uploadData.file.uri;
-        console.log("הקובץ הועלה בהצלחה:", fileUri);
+        console.log("הקובץ הועלה:", fileUri);
 
         // 3. שליחה ל-Gemini 2.0 Flash
         const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${API_KEY}`;
@@ -61,7 +69,6 @@ export default async function handler(req, res) {
         });
 
         const data = await geminiResponse.json();
-        
         if (data.error) throw new Error(data.error.message);
 
         let aiText = data.candidates[0].content.parts[0].text;
