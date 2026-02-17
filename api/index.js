@@ -6,73 +6,59 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const YEMOT_TOKEN = process.env.YEMOT_TOKEN;
 
 export default async function handler(req, res) {
+    const params = { ...req.query, ...req.body };
+    const voiceResult = params.voice_result;
+    const userId = params.ApiPhone || "guest";
+
     if (req.url.includes('favicon')) return res.status(200).send("");
 
-    const params = { ...req.query, ...req.body };
-    const userId = params.ApiPhone || "guest";
-    let voiceResult = params.voice_result;
-
-    const model = genAI.getGenerativeModel({ 
-        model: "gemini-1.5-flash",
-        systemInstruction: `אתה עוזר אישי חכם למשפחה שומרת מצוות,, חוקים: 1,, שפה נקייה בלבד,, 2,, אסור נקודות (.) בכלל,, 3,, תשובות קצרות,,`
-    });
-
     try {
-        let aiResponseText = "";
-
         if (!voiceResult) {
-            aiResponseText = "שלום,, אני המוח של המערכת,, במה אוכל לעזור?";
-        } else {
-            // טיפול במערך קבצים - לוקחים את האחרון
-            if (Array.isArray(voiceResult)) {
-                voiceResult = voiceResult[voiceResult.length - 1];
-            }
-
-            // מוודא שהנתיב מתחיל בסלאש אחד בלבד
-            const cleanPath = voiceResult.startsWith('/') ? voiceResult : `/${voiceResult}`;
-            
-            // בניית ה-URL המדויק לפי ההנחיה שלך
-            const downloadUrl = `https://www.call2all.co.il/ym/api/DownloadFile?token=${YEMOT_TOKEN}&path=ivr2:${cleanPath}`;
-
-            console.log("מנסה להוריד מהכתובת:", downloadUrl);
-
-            const response = await fetch(downloadUrl);
-            if (!response.ok) {
-                console.error("שגיאת הורדה:", response.status);
-                throw new Error("קובץ השמע לא נמצא בנתיב המבוקש");
-            }
-            
-            const arrayBuffer = await response.arrayBuffer();
-            
-            const chat = model.startChat({
-                history: await redis.get(`chat_${userId}`) || [],
-            });
-
-            const result = await chat.sendMessage([
-                { 
-                    inlineData: { 
-                        mimeType: "audio/wav", 
-                        data: Buffer.from(arrayBuffer).toString("base64") 
-                    } 
-                },
-                { text: "ענה בקצרה ללא נקודות" }
-            ]);
-
-            aiResponseText = result.response.text();
-            
-            // שמירת היסטוריה מעודכנת
-            const updatedHistory = await chat.getHistory();
-            await redis.set(`chat_${userId}`, updatedHistory.slice(-10), { ex: 3600 });
+            const welcome = "שלום,, אני המוח של המערכת,, במה אוכל לעזור?";
+            return res.status(200).send(`read=t-${welcome}=voice_result,,record,,,no,,,,20`);
         }
 
-        const cleanResponse = aiResponseText.replace(/\./g, ",,").replace(/["']/g, "");
-        const ymtCommand = `read=t-${cleanResponse}=voice_result,,record,,,no,,,,20`;
+        // טיפול במערך
+        const actualPath = Array.isArray(voiceResult) ? voiceResult[voiceResult.length - 1] : voiceResult;
         
+        // בניית הנתיב - מוודא שיש סלאש בתחילת הנתיב עבור ivr2:
+        const formattedPath = actualPath.startsWith('/') ? actualPath : `/${actualPath}`;
+        const downloadUrl = `https://www.call2all.co.il/ym/api/DownloadFile?token=${YEMOT_TOKEN}&path=ivr2:${formattedPath}`;
+
+        console.log("--- ניסיון הורדה ---");
+        console.log("נתיב מקורי מימות:", actualPath);
+        console.log("כתובת הורדה סופית:", downloadUrl);
+
+        const response = await fetch(downloadUrl);
+        
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error("שגיאת שרת ימות:", response.status, errorText);
+            throw new Error(`שגיאת הורדה ${response.status}`);
+        }
+
+        const arrayBuffer = await response.arrayBuffer();
+        console.log("הקובץ הורד בהצלחה, גודל:", arrayBuffer.byteLength);
+
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const chat = model.startChat({
+            history: await redis.get(`chat_${userId}`) || [],
+        });
+
+        const result = await chat.sendMessage([
+            { inlineData: { mimeType: "audio/wav", data: Buffer.from(arrayBuffer).toString("base64") } },
+            { text: "ענה בקצרה ללא נקודות" }
+        ]);
+
+        const aiText = result.response.text().replace(/\./g, ",,").replace(/["']/g, "");
+        await redis.set(`chat_${userId}`, (await chat.getHistory()).slice(-10), { ex: 3600 });
+
         res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-        return res.status(200).send(ymtCommand);
+        return res.status(200).send(`read=t-${aiText}=voice_result,,record,,,no,,,,20`);
 
     } catch (error) {
-        console.error("שגיאה בעיבוד:", error.message);
-        return res.status(200).send("read=t-סליחה,, חלה שגיאה קטנה בגישה לקובץ ההקלטה,, נסה שוב=voice_result,,record,,,no,,,,20");
+        console.error("קריסה בתהליך:", error.message);
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        return res.status(200).send(`read=t-חלה שגיאה בעיבוד הקובץ,, נסו שוב בשאלה אחרת=voice_result,,record,,,no,,,,20`);
     }
 }
