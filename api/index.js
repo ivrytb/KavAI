@@ -74,20 +74,30 @@ export default async function handler(req, res) {
         const uploadData = await finalUpload.json();
         const fileUri = uploadData.file.uri;
 
-        console.log("--- 4. מבקש תשובה מ-Gemini 2.5 Flash ---");
+        // 4. בקשת תשובה מ-Gemini 2.5 Flash עם הנחיות לסגנון אנושי
+        console.log("--- 4. מבקש תשובה מ-Gemini 2.5 Flash (סגנון אנושי) ---");
         const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 contents: [{
                     parts: [
-                        { text: "ענה בעברית קצרה. ללא גרשיים. נקודות הופכות לפסיקים כפולים (,,)." },
+                        { 
+                            text: `אתה עוזר קולי ידידותי, חכם ואנושי בשם 'המוח'. 
+                            הנחיות למענה:
+                            1. ענה בעברית זורמת, חמה ומורחבת (לא קצרה מדי, אבל גם לא מגילות).
+                            2. השתמש בשפה אנושית - אפשר להוסיף ביטויים כמו 'בשמחה', 'שאלה מצוינת', או 'מעניין מאוד'.
+                            3. בכל סיום של תשובה, הצע המשך לשיחה או שאל שאלה רלוונטית כדי לעזור למשתמש להמשיך.
+                            4. חשוב מאוד: אל תשתמש בגרשיים (") או סימנים מיוחדים.
+                            5. נקודות בסוף משפטים הופכות לפסיקים כפולים (,,) כדי שההקראה תהיה טבעית.
+                            6. ללא ירידות שורה בכלל.` 
+                        },
                         { file_data: { mime_type: "audio/wav", file_uri: fileUri } }
                     ]
                 }]
             })
         });
-
+        
         const data = await response.json();
         let aiText = data.candidates?.[0]?.content?.parts?.[0]?.text || "לא הבנתי";
 
