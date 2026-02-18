@@ -63,19 +63,24 @@ export default async function handler(req, res) {
         const data = await response.json();
         let aiText = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
 
-        // --- הניקוי המאוזן שלך ---
+        // --- ניקוי משופר ---
         aiText = aiText
-            .replace(/\n/g, " ")             // הסרת ירידות שורה (חובה!)
-            .replace(/["'״׳]/g, "")          // הסרת גרשיים (ליתר ביטחון)
-            .replace(/\*/g, "")              // הסרת כוכביות (של הדגשות)
+            .replace(/\n/g, " ")             // הסרת ירידות שורה
+            .replace(/["'״׳]/g, "")          // הסרת גרשיים
+            .replace(/\*/g, "")              // הסרת כוכביות
+            .replace(/-/g, " עד ")           // החלפת מקף (בטווח שנים למשל) במילה "עד"
             .replace(/\./g, ",,")            // החלפת נקודות בפסיקים כפולים
             .trim();
 
         console.log("שולח לימות המשיח:", aiText);
 
         res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-        // שולחים טקסט רגיל עם רווחים, בלי קידוד URL ובלי פלוסים
-        return res.status(200).send(`read=t-${aiText}=voice_result,,record,,,no,,,,20`);
+        
+        // שימוש ב-encodeURI במקום encodeURIComponent שומר על הפסיקים והסימנים
+        // אבל מקדד תווים שעלולים לשבור את ה-HTTP
+        const finalUrlSafeText = encodeURI(aiText);
+
+        return res.status(200).send(`read=t-${finalUrlSafeText}=voice_result,,record,,,no,,,,20`);
 
     } catch (error) {
         console.error("Error:", error.message);
