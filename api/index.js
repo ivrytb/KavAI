@@ -14,34 +14,14 @@ export default async function handler(req, res) {
         const actualPath = Array.isArray(voiceResult) ? voiceResult[voiceResult.length - 1] : voiceResult;
         const formattedPath = actualPath.startsWith('/') ? actualPath : `/${actualPath}`;
         
-        // שימוש ב-URL API המודרני למניעת שגיאות Deprecation
-        const downloadUrl = new URL('https://www.call2all.co.il/ym/api/DownloadFile');
-        downloadUrl.searchParams.append('token', YEMOT_TOKEN);
-        downloadUrl.searchParams.append('path', `ivr2:${formattedPath}`);
+        const downloadUrl = `https://www.call2all.co.il/ym/api/DownloadFile?token=${YEMOT_TOKEN}&path=ivr2:${formattedPath}`;
 
         console.log("--- 1. מוריד קובץ מימות המשיח ---");
-        const audioResp = await fetch(downloadUrl.toString());
-        if (!audioResp.ok) throw new Error("קובץ שמע לא נמצא");
+        const audioResp = await fetch(downloadUrl);
+        if (!audioResp.ok) throw new Error("קובץ שמע לא נמצא בימות");
         const buffer = await audioResp.arrayBuffer();
 
-        console.log("--- 2. מעלה לגוגל בשיטה היצירה ---");
-        // מעלים ישירות בלי Resumable כדי למנוע את שגיאת ה-Missing X-
-        const uploadResponse = await fetch(`https://generativelanguage.googleapis.com/upload/v1beta/files?key=${API_KEY}`, {
-            method: 'POST',
-            headers: {
-                'X-Goog-Upload-Protocol': 'multipart',
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                file: { display_name: "audio_input" }
-            })
-        });
-
-        // הערה: בגלל המורכבות של Multipart ב-Fetch פשוט, נשתמש בטכניקה הכי בטוחה:
-        // שלב א': יצירת המטה-דאטה
-        // שלב ב': העלאת התוכן
-        // אבל כדי לא להסתבך עם Multipart, נחזור ל-Resumable עם ה-Headers המדויקים שגוגל דורשת:
-
+        console.log("--- 2. פותח חיבור העלאה לגוגל ---");
         const startUpload = await fetch(`https://generativelanguage.googleapis.com/upload/v1beta/files?key=${API_KEY}`, {
             method: 'POST',
             headers: {
@@ -51,32 +31,35 @@ export default async function handler(req, res) {
                 'X-Goog-Upload-Header-Content-Type': 'audio/wav',
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ file: { display_name: 'AUDIO' } })
+            body: JSON.stringify({ file: { display_name: 'AUDIO_INPUT' } })
         });
 
         const uploadUrl = startUpload.headers.get('x-goog-upload-url');
-        if (!uploadUrl) {
-            const errorText = await startUpload.text();
-            throw new Error(`Google Error: ${errorText}`);
-        }
+        if (!uploadUrl) throw new Error("לא התקבל URL להעלאה מגוגל");
 
         console.log("--- 3. מעלה את התוכן ליעד הסופי ---");
         const finalUpload = await fetch(uploadUrl, {
-            method: 'POST', // גוגל מקבלת POST או PUT בכתובת הזו
+            method: 'POST',
             headers: {
                 'X-Goog-Upload-Command': 'upload, finalize',
-                'X-Goog-Upload-Offset': '0',
-                'Content-Length': buffer.byteLength.toString()
+                'X-Goog-Upload-Offset': '0'
             },
             body: buffer
         });
 
         const uploadData = await finalUpload.json();
-        const fileUri = uploadData.file.uri;
+        
+        // בדיקת בטיחות: האם הקובץ באמת עלה?
+        if (!uploadData.file || !uploadData.file.uri) {
+            console.error("תגובת גוגל להעלאה:", JSON.stringify(uploadData));
+            throw new Error("העלאת הקובץ נכשלה - לא התקבל URI");
+        }
 
-        // 4. בקשת תשובה מ-Gemini 2.5 Flash עם הנחיות לסגנון אנושי
-        console.log("--- 4. מבקש תשובה מ-Gemini 2.5 Flash (סגנון אנושי) ---");
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`, {
+        const fileUri = uploadData.file.uri;
+        console.log("קובץ עלה בהצלחה:", fileUri);
+
+        console.log("--- 4. מבקש תשובה מהמוח ---");
+        const geminiResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -85,29 +68,40 @@ export default async function handler(req, res) {
                         { 
                             text: `אתה עוזר קולי ידידותי, חכם ואנושי בשם 'המוח'. 
                             הנחיות למענה:
-                            1. ענה בעברית זורמת, חמה ומורחבת (לא קצרה מדי, אבל גם לא מגילות).
-                            2. השתמש בשפה אנושית - אפשר להוסיף ביטויים כמו 'בשמחה', 'שאלה מצוינת', או 'מעניין מאוד'.
-                            3. בכל סיום של תשובה, הצע המשך לשיחה או שאל שאלה רלוונטית כדי לעזור למשתמש להמשיך.
-                            4. חשוב מאוד: אל תשתמש בגרשיים (") או סימנים מיוחדים.
-                            5. נקודות בסוף משפטים הופכות לפסיקים כפולים (,,) כדי שההקראה תהיה טבעית.
-                            6. ללא ירידות שורה בכלל.` 
+                            1. ענה בעברית זורמת, חמה ומורחבת.
+                            2. השתמש בשפה אנושית (לדוגמה: 'בשמחה', 'שאלה מעולה').
+                            3. בכל סיום של תשובה, הצע המשך לשיחה או שאל שאלה כדי לעזור למשתמש.
+                            4. ללא גרשיים בכלל.
+                            5. נקודות הופכות לפסיקים כפולים (,,).
+                            6. הכל בשורה אחת בלי ירידות שורה.` 
                         },
                         { file_data: { mime_type: "audio/wav", file_uri: fileUri } }
                     ]
                 }]
             })
         });
-        
-        const data = await response.json();
-        let aiText = data.candidates?.[0]?.content?.parts?.[0]?.text || "לא הבנתי";
 
-        aiText = aiText.replace(/\n/g, " ").replace(/["'״׳]/g, "").replace(/\./g, ",,").trim();
+        const data = await geminiResponse.json();
+        
+        if (data.error) throw new Error(data.error.message);
+
+        let aiText = data.candidates?.[0]?.content?.parts?.[0]?.text || "סליחה,, לא הצלחתי להבין את ההקלטה,, אפשר לחזור על זה?";
+
+        // ניקוי טקסט סופי
+        aiText = aiText
+            .replace(/\n/g, " ")
+            .replace(/["'״׳]/g, "")
+            .replace(/\*/g, "")
+            .replace(/\./g, ",,")
+            .trim();
+
+        console.log("תשובה סופית:", aiText);
 
         res.setHeader('Content-Type', 'text/plain; charset=utf-8');
         return res.status(200).send(`read=t-${aiText}=voice_result,,record,,,no,,,,20`);
 
     } catch (error) {
-        console.error("DEBUG:", error.message);
-        return res.status(200).send(`read=t-חלה שגיאה,, נסה שוב=voice_result,,record,,,no,,,,20`);
+        console.error("DEBUG ERROR:", error.message);
+        return res.status(200).send(`read=t-מצטער,, חלה שגיאה בחיבור למוח,, נסו שוב בעוד רגע=voice_result,,record,,,no,,,,20`);
     }
 }
