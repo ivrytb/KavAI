@@ -58,6 +58,7 @@ export default async function handler(req, res) {
         const fileUri = uploadData.file.uri;
         console.log("קובץ עלה בהצלחה:", fileUri);
 
+        /*
         console.log("--- 4. מבקש תשובה מהמוח ---");
         const geminiResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`, {
             method: 'POST',
@@ -86,7 +87,52 @@ export default async function handler(req, res) {
         if (data.error) throw new Error(data.error.message);
 
         let aiText = data.candidates?.[0]?.content?.parts?.[0]?.text || "סליחה,, לא הצלחתי להבין את ההקלטה,, אפשר לחזור על זה?";
+        */
 
+        console.log("--- 4. מבקש תשובה מהמוח (עם מנגנון גיבוי) ---");
+        
+        const models = [
+            'gemini-2.5-flash',
+            'gemini-1.5-flash',
+            'gemini-2.0-flash-lite-001'
+        ];
+
+        let data;
+        let success = false;
+
+        for (const modelName of models) {
+            if (success) break;
+            
+            console.log(`מנסה דגם: ${modelName}`);
+            const geminiResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${API_KEY}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contents: [{
+                        parts: [
+                            { text: "אתה עוזר קולי ידידותי בשם המוח. ענה בעברית מורחבת ואנושית, ללא גרשיים, נקודות הופכות ל פסיק כפול (,,). בסיום הצע להמשיך את השיחה." },
+                            { file_data: { mime_type: "audio/wav", file_uri: fileUri } }
+                        ]
+                    }]
+                })
+            });
+
+            data = await geminiResponse.json();
+
+            if (!data.error) {
+                success = true;
+                console.log(`הצלחתי עם דגם: ${modelName}`);
+            } else if (data.error.status === "RESOURCE_EXHAUSTED") {
+                console.warn(`דגם ${modelName} חסום זמנית (מכסה), עובר לבא בתור...`);
+            } else {
+                throw new Error(data.error.message);
+            }
+        }
+
+        if (!success) throw new Error("כל המודלים עמוסים כרגע");
+
+        let aiText = data.candidates?.[0]?.content?.parts?.[0]?.text || "לא הצלחתי להבין";
+        
         // ניקוי טקסט סופי
         aiText = aiText
             .replace(/\n/g, " ")
