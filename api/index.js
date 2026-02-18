@@ -89,12 +89,13 @@ export default async function handler(req, res) {
         let aiText = data.candidates?.[0]?.content?.parts?.[0]?.text || "סליחה,, לא הצלחתי להבין את ההקלטה,, אפשר לחזור על זה?";
         */
 
-        console.log("--- 4. מבקש תשובה מהמוח (עם מנגנון גיבוי) ---");
+        console.log("--- 4. מבקש תשובה מהמוח (מנגנון גיבוי משופר) ---");
         
+        // שמות הדגמים המדויקים שנתמכים ב-v1beta
         const models = [
-            'gemini-2.5-flash',
+            'gemini-2.0-flash',
             'gemini-1.5-flash',
-            'gemini-2.0-flash-lite-001'
+            'gemini-1.5-flash-8b'
         ];
 
         let data;
@@ -104,34 +105,43 @@ export default async function handler(req, res) {
             if (success) break;
             
             console.log(`מנסה דגם: ${modelName}`);
-            const geminiResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${API_KEY}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    contents: [{
-                        parts: [
-                            { text: "אתה עוזר קולי ידידותי בשם המוח. ענה בעברית מורחבת ואנושית, ללא גרשיים, נקודות הופכות ל פסיק כפול (,,). בסיום הצע להמשיך את השיחה." },
-                            { file_data: { mime_type: "audio/wav", file_uri: fileUri } }
-                        ]
-                    }]
-                })
-            });
+            try {
+                const geminiResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${API_KEY}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        contents: [{
+                            parts: [
+                                { text: "אתה עוזר קולי ידידותי בשם המוח. ענה בעברית מורחבת ואנושית, ללא גרשיים, נקודות הופכות לפסיק כפול (,,). בסיום התשובה הצע תמיד להמשיך את השיחה." },
+                                { file_data: { mime_type: "audio/wav", file_uri: fileUri } }
+                            ]
+                        }]
+                    })
+                });
 
-            data = await geminiResponse.json();
+                data = await geminiResponse.json();
 
-            if (!data.error) {
-                success = true;
-                console.log(`הצלחתי עם דגם: ${modelName}`);
-            } else if (data.error.status === "RESOURCE_EXHAUSTED") {
-                console.warn(`דגם ${modelName} חסום זמנית (מכסה), עובר לבא בתור...`);
-            } else {
-                throw new Error(data.error.message);
+                if (data.error) {
+                    if (data.error.status === "RESOURCE_EXHAUSTED" || data.error.code === 429) {
+                        console.warn(`דגם ${modelName} בעומס (מכסה), עובר לבא בתור...`);
+                        continue; // ממשיך לדגם הבא
+                    } else {
+                        console.error(`שגיאה בדגם ${modelName}:`, data.error.message);
+                        continue; // מנסה את הדגם הבא במקום לקרוס
+                    }
+                }
+
+                if (data.candidates && data.candidates[0]) {
+                    success = true;
+                    console.log(`הצלחתי עם דגם: ${modelName}`);
+                }
+            } catch (err) {
+                console.error(`שגיאת תקשורת עם ${modelName}:`, err.message);
             }
         }
 
-        if (!success) throw new Error("כל המודלים עמוסים כרגע");
-
-        let aiText = data.candidates?.[0]?.content?.parts?.[0]?.text || "לא הצלחתי להבין";
+        if (!success) throw new Error("כל הדגמים עמוסים או לא זמינים כרגע");
+        
         
         // ניקוי טקסט סופי
         aiText = aiText
