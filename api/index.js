@@ -4,7 +4,7 @@ export default async function handler(req, res) {
     const API_KEY = process.env.GEMINI_API_KEY;
     const YEMOT_TOKEN = process.env.YEMOT_TOKEN;
 
-    if (req.url.includes('favicon')) return res.status(200).send("");
+    if (req.url && req.url.includes('favicon')) return res.status(200).send("");
 
     try {
         if (!voiceResult) {
@@ -21,10 +21,10 @@ export default async function handler(req, res) {
         if (!audioResp.ok) throw new Error("קובץ שמע לא נמצא בימות");
         const buffer = await audioResp.arrayBuffer();
 
-        // המרת הקובץ לפורמט Base64 עבור שיטת ה-Inline
+        // המרת הקובץ לפורמט Base64
         const base64Audio = Buffer.from(buffer).toString('base64');
 
-        console.log("--- 4. מבקש תשובה מהמוח (Inline Data) ---");
+        console.log("--- 2. מבקש תשובה מהמוח (Inline Data) ---");
         
         const models = [
             'gemini-2.0-flash',
@@ -32,9 +32,8 @@ export default async function handler(req, res) {
             'gemini-1.5-flash-8b'
         ];
 
-        let data;
-        let success = false;
         let aiText = "";
+        let success = false;
 
         for (const modelName of models) {
             if (success) break;
@@ -48,14 +47,7 @@ export default async function handler(req, res) {
                         contents: [{
                             parts: [
                                 { 
-                                    text: `אתה עוזר קולי ידידותי, חכם ואנושי בשם 'המוח'. 
-                                    הנחיות למענה:
-                                    1. ענה בעברית זורמת, חמה ומורחבת.
-                                    2. השתמש בשפה אנושית (לדוגמה: 'בשמחה', 'שאלה מעולה').
-                                    3. בכל סיום של תשובה, הצע המשך לשיחה או שאל שאלה כדי לעזור למשתמש.
-                                    4. ללא גרשיים בכלל.
-                                    5. נקודות הופכות לפסיקים כפולים (,,).
-                                    6. הכל בשורה אחת בלי ירידות שורה.` 
+                                    text: `אתה עוזר קולי ידידותי, חכם ואנושי בשם 'המוח'. ענה בעברית זורמת, חמה ומורחבת. השתמש בשפה אנושית. בכל סיום של תשובה, הצע המשך לשיחה או שאל שאלה. ללא גרשיים בכלל. נקודות הופכות לפסיקים כפולים (,,). הכל בשורה אחת בלי ירידות שורה.` 
                                 },
                                 { 
                                     inline_data: { 
@@ -68,30 +60,25 @@ export default async function handler(req, res) {
                     })
                 });
 
-                data = await geminiResponse.json();
+                const data = await geminiResponse.json();
 
                 if (data.error) {
-                    if (data.error.status === "RESOURCE_EXHAUSTED" || data.error.code === 429) {
-                        console.warn(`דגם ${modelName} בעומס, עובר לבא בתור...`);
-                        continue;
-                    } else {
-                        console.error(`שגיאה בדגם ${modelName}:`, data.error.message);
-                        continue;
-                    }
+                    console.warn(`דגם ${modelName} נכשל: ${data.error.message}`);
+                    continue;
                 }
 
-                if (data.candidates && data.candidates[0]) {
+                if (data.candidates && data.candidates[0]?.content?.parts?.[0]?.text) {
                     aiText = data.candidates[0].content.parts[0].text;
                     success = true;
                     console.log(`הצלחתי עם דגם: ${modelName}`);
                 }
             } catch (err) {
-                console.error(`שגיאת תקשורת עם ${modelName}:`, err.message);
+                console.error(`שגיאה בגישה לדגם ${modelName}:`, err.message);
             }
         }
 
-        if (!success) throw new Error("כל הדגמים עמוסים או לא זמינים כרגע");
-        
+        if (!success) throw new Error("כל הדגמים נכשלו");
+
         // ניקוי טקסט סופי
         aiText = aiText
             .replace(/\n/g, " ")
@@ -110,173 +97,3 @@ export default async function handler(req, res) {
         return res.status(200).send(`read=t-מצטער,, חלה שגיאה בחיבור למוח,, נסו שוב בעוד רגע=voice_result,,record,,,no,,,,20`);
     }
 }
-
-
-
-/*
-
-export default async function handler(req, res) {
-    const params = { ...req.query, ...req.body };
-    const voiceResult = params.voice_result;
-    const API_KEY = process.env.GEMINI_API_KEY;
-    const YEMOT_TOKEN = process.env.YEMOT_TOKEN;
-
-    if (req.url.includes('favicon')) return res.status(200).send("");
-
-    try {
-        if (!voiceResult) {
-            return res.status(200).send(`read=t-שלום,, אני המוח,, איך אוכל לעזור?=voice_result,,record,,,no,,,,20`);
-        }
-
-        const actualPath = Array.isArray(voiceResult) ? voiceResult[voiceResult.length - 1] : voiceResult;
-        const formattedPath = actualPath.startsWith('/') ? actualPath : `/${actualPath}`;
-        
-        const downloadUrl = `https://www.call2all.co.il/ym/api/DownloadFile?token=${YEMOT_TOKEN}&path=ivr2:${formattedPath}`;
-
-        console.log("--- 1. מוריד קובץ מימות המשיח ---");
-        const audioResp = await fetch(downloadUrl);
-        if (!audioResp.ok) throw new Error("קובץ שמע לא נמצא בימות");
-        const buffer = await audioResp.arrayBuffer();
-
-        console.log("--- 2. פותח חיבור העלאה לגוגל ---");
-        const startUpload = await fetch(`https://generativelanguage.googleapis.com/upload/v1beta/files?key=${API_KEY}`, {
-            method: 'POST',
-            headers: {
-                'X-Goog-Upload-Protocol': 'resumable',
-                'X-Goog-Upload-Command': 'start',
-                'X-Goog-Upload-Header-Content-Length': buffer.byteLength.toString(),
-                'X-Goog-Upload-Header-Content-Type': 'audio/wav',
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ file: { display_name: 'AUDIO_INPUT' } })
-        });
-
-        const uploadUrl = startUpload.headers.get('x-goog-upload-url');
-        if (!uploadUrl) throw new Error("לא התקבל URL להעלאה מגוגל");
-
-        console.log("--- 3. מעלה את התוכן ליעד הסופי ---");
-        const finalUpload = await fetch(uploadUrl, {
-            method: 'POST',
-            headers: {
-                'X-Goog-Upload-Command': 'upload, finalize',
-                'X-Goog-Upload-Offset': '0'
-            },
-            body: buffer
-        });
-
-        const uploadData = await finalUpload.json();
-        
-        // בדיקת בטיחות: האם הקובץ באמת עלה?
-        if (!uploadData.file || !uploadData.file.uri) {
-            console.error("תגובת גוגל להעלאה:", JSON.stringify(uploadData));
-            throw new Error("העלאת הקובץ נכשלה - לא התקבל URI");
-        }
-
-        const fileUri = uploadData.file.uri;
-        console.log("קובץ עלה בהצלחה:", fileUri);
-
-        /*
-        console.log("--- 4. מבקש תשובה מהמוח ---");
-        const geminiResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                contents: [{
-                    parts: [
-                        { 
-                            text: `אתה עוזר קולי ידידותי, חכם ואנושי בשם 'המוח'. 
-                            הנחיות למענה:
-                            1. ענה בעברית זורמת, חמה ומורחבת.
-                            2. השתמש בשפה אנושית (לדוגמה: 'בשמחה', 'שאלה מעולה').
-                            3. בכל סיום של תשובה, הצע המשך לשיחה או שאל שאלה כדי לעזור למשתמש.
-                            4. ללא גרשיים בכלל.
-                            5. נקודות הופכות לפסיקים כפולים (,,).
-                            6. הכל בשורה אחת בלי ירידות שורה.` 
-                        },
-                        { file_data: { mime_type: "audio/wav", file_uri: fileUri } }
-                    ]
-                }]
-            })
-        });
-
-        const data = await geminiResponse.json();
-        
-        if (data.error) throw new Error(data.error.message);
-
-        let aiText = data.candidates?.[0]?.content?.parts?.[0]?.text || "סליחה,, לא הצלחתי להבין את ההקלטה,, אפשר לחזור על זה?";
-        */
-
-        /*
-        console.log("--- 4. מבקש תשובה מהמוח (מנגנון גיבוי משופר) ---");
-        
-        // שמות הדגמים המדויקים שנתמכים ב-v1beta
-        const models = [
-            'gemini-2.0-flash',
-            'gemini-1.5-flash',
-            'gemini-1.5-flash-8b'
-        ];
-
-        let data;
-        let success = false;
-
-        for (const modelName of models) {
-            if (success) break;
-            
-            console.log(`מנסה דגם: ${modelName}`);
-            try {
-                const geminiResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${API_KEY}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        contents: [{
-                            parts: [
-                                { text: "אתה עוזר קולי ידידותי בשם המוח. ענה בעברית מורחבת ואנושית, ללא גרשיים, נקודות הופכות לפסיק כפול (,,). בסיום התשובה הצע תמיד להמשיך את השיחה." },
-                                { file_data: { mime_type: "audio/wav", file_uri: fileUri } }
-                            ]
-                        }]
-                    })
-                });
-
-                data = await geminiResponse.json();
-
-                if (data.error) {
-                    if (data.error.status === "RESOURCE_EXHAUSTED" || data.error.code === 429) {
-                        console.warn(`דגם ${modelName} בעומס (מכסה), עובר לבא בתור...`);
-                        continue; // ממשיך לדגם הבא
-                    } else {
-                        console.error(`שגיאה בדגם ${modelName}:`, data.error.message);
-                        continue; // מנסה את הדגם הבא במקום לקרוס
-                    }
-                }
-
-                if (data.candidates && data.candidates[0]) {
-                    success = true;
-                    console.log(`הצלחתי עם דגם: ${modelName}`);
-                }
-            } catch (err) {
-                console.error(`שגיאת תקשורת עם ${modelName}:`, err.message);
-            }
-        }
-
-        if (!success) throw new Error("כל הדגמים עמוסים או לא זמינים כרגע");
-        
-        
-        // ניקוי טקסט סופי
-        aiText = aiText
-            .replace(/\n/g, " ")
-            .replace(/["'״׳]/g, "")
-            .replace(/\*/g, "")
-            .replace(/\./g, ",,")
-            .trim();
-
-        console.log("תשובה סופית:", aiText);
-
-        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-        return res.status(200).send(`read=t-${aiText}=voice_result,,record,,,no,,,,20`);
-
-    } catch (error) {
-        console.error("DEBUG ERROR:", error.message);
-        return res.status(200).send(`read=t-מצטער,, חלה שגיאה בחיבור למוח,, נסו שוב בעוד רגע=voice_result,,record,,,no,,,,20`);
-    }
-}
-*/
