@@ -47,7 +47,7 @@ export default async function handler(req, res) {
 
         console.log("--- שלב 4: בקשת תשובה מ-Gemini 2.0 Flash Stable ---");
         // שימוש בדגם היציב מהרשימה שלך
-        const geminiUrl = `https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash-001:generateContent?key=${API_KEY}`;
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`;
 
         const response = await fetch(geminiUrl, {
             method: 'POST',
